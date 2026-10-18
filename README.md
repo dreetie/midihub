@@ -1,5 +1,11 @@
 # midihub
 
+> **This project is vibe coded.** It was built by describing what I wanted to
+> AI coding assistants (opencode and Claude) and testing the result on my own
+> instruments, not by writing every line by hand. It works well for me, but
+> read the code before relying on it for anything critical, and expect rough
+> edges. Issues and pull requests are welcome.
+
 A headless USB-MIDI hub for Linux. Plug your instruments and controllers into a
 PC or a small dedicated computer such as a Raspberry Pi, then use a web page to:
 
