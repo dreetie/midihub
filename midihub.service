@@ -1,0 +1,15 @@
+[Unit]
+Description=midihub USB-MIDI router/translator
+After=network.target qmidinet.service
+Wants=qmidinet.service
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/midihub/web.py
+WorkingDirectory=/opt/midihub
+User=midihub
+Group=audio
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

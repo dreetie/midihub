@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="color-scheme" content="dark light">
+    <title>midihub · log in</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main class="login">
+    <form class="card" id="loginForm">
+        <div class="brand"><span class="brand-mark" aria-hidden="true"></span>midihub</div>
+        <label class="field">
+            <span>Password</span>
+            <input type="password" id="password" autocomplete="current-password" required autofocus>
+        </label>
+        <div class="err" id="err" role="alert"></div>
+        <button class="btn primary" type="submit">Log in</button>
+    </form>
+</main>
+<script>
+'use strict';
+document.getElementById('loginForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const err = document.getElementById('err');
+    err.textContent = '';
+    const r = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Midihub': '1' },
+        body: JSON.stringify({ password: document.getElementById('password').value }),
+    });
+    if (r.ok) { location.href = '/'; return; }
+    let msg = 'Wrong password';
+    try { msg = (await r.json()).error || msg; } catch { /* keep default */ }
+    err.textContent = msg;
+});
+</script>
+</body>
+</html>

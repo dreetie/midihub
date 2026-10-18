@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="color-scheme" content="dark light">
+    <title>midihub</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<!-- ===== Top bar: status + save ===== -->
+<header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span>midihub</div>
+
+    <div class="status">
+        <button class="pill" id="devPill" type="button" title="Devices">
+            <span class="dot" id="devDot"></span><span class="pill-text" id="devPillText">Devices</span>
+        </button>
+        <button class="pill" id="guardPill" type="button" title="Loop guard">
+            <span class="dot" id="guardDot"></span><span class="pill-text" id="guardPillText">Loop guard</span>
+        </button>
+    </div>
+
+    <div class="profile">
+        <div class="profile-select">
+            <span class="dirty" id="dirtyDot" title="Unsaved changes" hidden style="position:static"></span>
+        </div>
+        <button class="btn primary" id="saveBtn" type="button">Save</button>
+        <button class="btn icon" id="menuBtn" type="button" aria-label="More" aria-haspopup="menu" aria-expanded="false">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="13" cy="8" r="1.5"/></svg>
+        </button>
+        <div class="menu" id="menu" role="menu" hidden>
+            <button type="button" role="menuitem" id="revertBtn">Discard unsaved changes</button>
+            <button type="button" role="menuitem" id="logoutBtn" hidden>Log out</button>
+        </div>
+    </div>
+</header>
+
+<main>
+    <!-- ===== Loop guard alerts ===== -->
+    <section class="card" id="alertsCard" hidden aria-live="polite">
+        <div class="card-head">
+            <h2>Loop guard</h2>
+            <span class="hint" id="alertsHint"></span>
+            <span class="spacer"></span>
+            <button class="btn" id="guardResetBtn" type="button">Reset</button>
+        </div>
+        <div class="alerts" id="alertList"></div>
+    </section>
+
+    <!-- ===== Settings ===== -->
+    <section class="card settings">
+        <nav class="tabs" role="tablist" aria-label="Sections">
+            <button class="tab" role="tab" type="button" data-tab="devices" aria-selected="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 6v7M10 6v7M14 6v7M18 6v7"/></svg>
+                Devices
+            </button>
+            <button class="tab" role="tab" type="button" data-tab="routes" aria-selected="false">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="5" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="12" r="2"/><path d="M7 6c6 0 6 6 10 6M7 18c6 0 6-6 10-6"/></svg>
+                Routes
+            </button>
+            <button class="tab" role="tab" type="button" data-tab="mappings" aria-selected="false">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h12l-3-3M20 17H8l3 3"/></svg>
+                Mappings
+            </button>
+            <button class="tab" role="tab" type="button" data-tab="monitor" aria-selected="false">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
+                Monitor
+            </button>
+            <button class="tab" role="tab" type="button" data-tab="settings" aria-selected="false">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg>
+                Settings
+            </button>
+        </nav>
+
+        <!-- Devices -->
+        <div class="panel" role="tabpanel" data-panel="devices">
+            <h3>Devices</h3>
+            <p class="hint">Give each instrument a short name. A device matches every MIDI port whose name contains its match text, so it is found again after you unplug it.</p>
+            <div class="mappings" id="deviceList"></div>
+            <div class="panel-section">
+                <div class="mapping-form" id="deviceForm">
+                    <div class="grid">
+                        <label class="field">
+                            <span>Port</span>
+                            <select id="devPort"></select>
+                        </label>
+                        <label class="field"><span>Name</span><input type="text" id="devName" placeholder="keys" maxlength="32" autocomplete="off"></label>
+                        <label class="field"><span>Match text</span><input type="text" id="devMatch" placeholder="part of the port name" autocomplete="off"></label>
+                    </div>
+                    <div class="form-actions">
+                        <button class="btn" id="devCancelBtn" type="button" hidden>Cancel</button>
+                        <button class="btn primary" id="devAddBtn" type="button">Add device</button>
+                    </div>
+                </div>
+                <div class="chips" id="portChips"></div>
+            </div>
+        </div>
+
+        <!-- Routes -->
+        <div class="panel" role="tabpanel" data-panel="routes" hidden>
+            <h3>Routes</h3>
+            <p class="hint">Tick a box to send everything from a device (row) to another device (column). Routes are wired directly by the system, so they add no delay.</p>
+            <div class="matrix-wrap"><table class="matrix" id="routeMatrix"></table></div>
+            <div class="legend">
+                <span><span class="badge ok">direct</span> wired by the system, no added delay</span>
+                <span><span class="badge warn">filtered</span> passes through midihub because a mapping replaces some messages</span>
+                <span><span class="badge err">blocked</span> would send MIDI in a circle</span>
+            </div>
+        </div>
+
+        <!-- Mappings -->
+        <div class="panel" role="tabpanel" data-panel="mappings" hidden>
+            <h3>Mappings</h3>
+            <p class="hint">Turn one message into another: a CC into a different CC, a fader into SysEx, a SysEx message into a note, and so on. Press <strong>Learn</strong> and move the control to fill a side in.</p>
+            <div class="mapping-form" id="mapForm">
+                <div class="io">
+                    <div class="io-side" id="inSide">
+                        <h4>When this comes in</h4>
+                        <div class="grid">
+                            <label class="field"><span>From device</span><select id="inDev"></select></label>
+                            <label class="field"><span>Message</span><select id="inType"></select></label>
+                            <label class="field" data-show="channel"><span>Channel</span><select id="inCh"></select></label>
+                            <label class="field" data-show="number"><span id="inNumLabel">Number</span><input type="number" id="inNum" min="0" max="127" placeholder="any"></label>
+                        </div>
+                        <div class="grid" data-show="sysex">
+                            <label class="field span-all"><span>SysEx message (hex)</span><input type="text" class="mono" id="inTpl" placeholder="F0 7D 01 10 00 F7" autocomplete="off"></label>
+                            <label class="field"><span>Value byte position</span><input type="number" id="inVi" min="0" placeholder="none"></label>
+                        </div>
+                        <div class="field-row">
+                            <span class="hint learn-hint" id="inHint"></span>
+                            <button class="btn" id="inLearnBtn" type="button" title="Move a control or press a key to fill this side in">Learn</button>
+                        </div>
+                    </div>
+                    <div class="io-side" id="outSide">
+                        <h4>Send this</h4>
+                        <div class="grid">
+                            <label class="field"><span>To device</span><select id="outDev"></select></label>
+                            <label class="field"><span>Message</span><select id="outType"></select></label>
+                            <label class="field" data-show="channel"><span>Channel</span><select id="outCh"></select></label>
+                            <label class="field" data-show="number"><span id="outNumLabel">Number</span><input type="number" id="outNum" min="0" max="127" placeholder="same"></label>
+                        </div>
+                        <div class="grid" data-show="sysex">
+                            <label class="field span-all"><span>SysEx message (hex)</span><input type="text" class="mono" id="outTpl" placeholder="F0 7D 01 10 00 F7" autocomplete="off"></label>
+                            <label class="field"><span>Value byte position</span><input type="number" id="outVi" min="0" placeholder="none"></label>
+                        </div>
+                        <div class="field-row">
+                            <span class="hint learn-hint" id="outHint"></span>
+                            <button class="btn" id="outLearnBtn" type="button" title="Move the control on the receiving device to copy its message">Learn</button>
+                            <button class="btn" id="testBtn" type="button" title="Send this message once at full value">▶ Test</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="grid" style="margin-top:14px">
+                    <div class="field span-all">
+                        <span class="label">Value range (optional): incoming min, max → outgoing min, max. Swap the outgoing pair to invert.</span>
+                        <div class="scale-row">
+                            <input type="number" id="sc0" placeholder="0" aria-label="Incoming min">
+                            <input type="number" id="sc1" placeholder="127" aria-label="Incoming max">
+                            <input type="number" id="sc2" placeholder="0" aria-label="Outgoing min">
+                            <input type="number" id="sc3" placeholder="127" aria-label="Outgoing max">
+                        </div>
+                    </div>
+                </div>
+                <div class="checks" style="margin-top:14px">
+                    <label class="check" title="The original message is not passed on by routes to the same device, only the translated one">
+                        <input type="checkbox" id="replaceOrig"> Replace the original message
+                    </label>
+                </div>
+                <div class="form-actions">
+                    <span class="hint preview-note" id="mapNote"></span>
+                    <button class="btn" id="mapCancelBtn" type="button" hidden>Cancel</button>
+                    <button class="btn primary" id="mapAddBtn" type="button">Add mapping</button>
+                </div>
+            </div>
+            <div class="mappings" id="mapList"></div>
+        </div>
+
+        <!-- Monitor -->
+        <div class="panel" role="tabpanel" data-panel="monitor" hidden>
+            <h3>Monitor</h3>
+            <p class="hint">See what your devices send. Use a message straight away as the input or output of a new mapping.</p>
+            <div class="toolbar">
+                <button class="btn" id="monBtn" type="button">Start listening</button>
+                <button class="btn" id="monClearBtn" type="button">Clear</button>
+                <span class="hint" id="monHint"></span>
+            </div>
+            <div class="monitor-wrap">
+                <table class="monitor">
+                    <thead><tr><th>Device</th><th>Message</th><th>Bytes</th><th></th></tr></thead>
+                    <tbody id="monBody"></tbody>
+                </table>
+            </div>
+            <div class="panel-section">
+                <h3>Send a message</h3>
+                <p class="hint">Push raw bytes to a device, for example to check what a SysEx message does.</p>
+                <div class="grid">
+                    <label class="field"><span>Device</span><select id="sendDev"></select></label>
+                    <div class="field span-all">
+                        <span class="label">Bytes (hex)</span>
+                        <div class="field-row">
+                            <input type="text" class="mono" id="sendHex" placeholder="B0 07 64" autocomplete="off">
+                            <button class="btn" id="sendBtn" type="button">Send</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings -->
+        <div class="panel" role="tabpanel" data-panel="settings" hidden>
+            <h3>Settings</h3>
+            <p class="hint">Startup messages, network sharing and loop protection.</p>
+            <div class="panel-section">
+                <h3>Startup messages</h3>
+                <p class="hint">Sent to a device whenever it connects, for example to switch it to a mode. Separate messages with <code>|</code>.</p>
+                <div class="grid" id="initList"></div>
+            </div>
+            <div class="panel-section">
+                <h3>Loop protection</h3>
+                <p class="hint">Stops MIDI from going round in circles between devices and flooding them.</p>
+                <div class="checks" style="margin-top:0">
+                    <label class="check"><input type="checkbox" id="lgBlock"> Don't connect routes that would make a loop</label>
+                    <label class="check"><input type="checkbox" id="lgEcho"> Mute a device for a moment when its messages bounce back</label>
+                    <label class="check"><input type="checkbox" id="lgFloodMute"> Also mute devices that flood</label>
+                </div>
+                <div class="grid" style="margin-top:16px">
+                    <label class="field"><span>Flood warning (messages per second)</span><input type="number" id="lgFlood" min="100" step="100"></label>
+                    <label class="field"><span>Mute for (seconds)</span><input type="number" id="lgMute" min="1" max="120"></label>
+                </div>
+            </div>
+            <div class="panel-section">
+                <h3>Network MIDI (qmidinet)</h3>
+                <p class="hint">Share devices with computers on your network over UDP multicast. qmidinet must be running.</p>
+                <div class="checks" id="netList" style="margin-top:0"></div>
+                <div class="grid" style="margin-top:16px">
+                    <label class="field"><span>UDP port</span><input type="number" id="netPort" min="1" max="65535"></label>
+                    <label class="field"><span>Multicast address</span><input type="text" id="netMcast" autocomplete="off"></label>
+                </div>
+            </div>
+            <div class="panel-section">
+                <h3>Web access</h3>
+                <div class="callout" id="webInfo"></div>
+            </div>
+        </div>
+    </section>
+</main>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<dialog id="confirmDialog">
+    <form method="dialog">
+        <h3 id="confirmTitle"></h3>
+        <p id="confirmText"></p>
+        <div class="form-actions">
+            <button class="btn" value="cancel">Cancel</button>
+            <button class="btn primary" value="ok" id="confirmOk"></button>
+        </div>
+    </form>
+</dialog>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

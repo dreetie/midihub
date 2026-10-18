@@ -1,0 +1,40 @@
+{
+  "web": { "port": 8080 },
+  "devices": {
+    "keys":  { "match": "USB MIDI Keyboard" },
+    "synth": { "match": "USB Synth" }
+  },
+  "routes": [
+    { "from": "keys", "to": ["synth"] }
+  ],
+  "mappings": [
+    {
+      "input":  { "device": "keys", "type": "cc", "channel": 0, "cc": 1 },
+      "output": { "device": "synth", "type": "cc", "cc": 74, "block_original": true }
+    },
+    {
+      "input":  { "device": "keys", "type": "cc", "channel": 0, "cc": 20 },
+      "output": { "device": "synth", "type": "sysex",
+                  "template": [240, 125, 1, 16, 0, 247], "value_index": 4 }
+    },
+    {
+      "input":  { "device": "synth", "type": "sysex",
+                  "template": [240, 125, 1, 17, 0, 247], "value_index": 4 },
+      "output": { "device": "keys", "type": "cc", "cc": 21 }
+    }
+  ],
+  "init": {
+    "synth": [[176, 121, 0]]
+  },
+  "loop_guard": {
+    "block_cycles": true,
+    "echo_guard": true,
+    "flood_limit": 2000,
+    "mute_seconds": 5
+  },
+  "network": {
+    "export": [],
+    "port": 21928,
+    "mcast": "225.0.0.37"
+  }
+}

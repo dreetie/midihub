@@ -1,0 +1,15 @@
+[Unit]
+Description=qmidinet - MIDI Network Gateway (UDP multicast)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/qmidinet --no-gui
+User=midihub
+Group=audio
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
