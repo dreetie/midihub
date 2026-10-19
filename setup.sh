@@ -28,7 +28,7 @@ $QMIDINET && pkgs+=(qmidinet)
 apt-get update
 apt-get install -y "${pkgs[@]}"
 
-id "$SVC_USER" >/dev/null 2>&1 || useradd -r -m -G audio -s /usr/sbin/nologin "$SVC_USER"
+id "$SVC_USER" >/dev/null 2>&1 || useradd -r -M -d /nonexistent -G audio -s /usr/sbin/nologin "$SVC_USER"
 usermod -aG audio "$SVC_USER"
 
 mkdir -p "$DEST"
