@@ -22,7 +22,8 @@ class Hub(unittest.TestCase):
 
         patches = [mock.patch("midihub.subprocess.run", side_effect=run),
                    mock.patch("midihub.shutil.which", return_value="/usr/bin/aconnect"),
-                   mock.patch("midihub.threading.Thread")]
+                   mock.patch("midihub.threading.Thread"),
+                   mock.patch("midihub._log")]
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
@@ -96,6 +97,27 @@ class Hub(unittest.TestCase):
         self.assertEqual(h.status()["guard"]["alerts"][-1]["kind"], "loop")
         h.reset_guard()
         self.assertEqual(self.calls[-1], ["20:0", "24:0"])
+
+    def test_replug_under_same_name_reopens_and_reconnects(self):
+        tokens = {SY: "001/005"}
+        with mock.patch("midihub._port_token", side_effect=lambda n: tokens.get(n)):
+            h = self.hub(routes=[{"from": "keys", "to": ["synth"]}],
+                         init={"synth": [[0xF0, 0x7D, 1, 0xF7]]})
+            old_in = h.ins["synth"][0]
+            self.calls.clear()
+            h.connect()
+            self.assertEqual(self.calls, [])  # nothing changed, nothing redone
+            tokens[SY] = "001/006"  # unplugged and back within one rescan
+            h.connect()
+        self.assertIsNot(h.ins["synth"][0], old_in)
+        self.assertIn(["20:0", "24:0"], self.calls)
+        self.assertEqual(fake_rtmidi.SENT[SY], [[0xF0, 0x7D, 1, 0xF7]] * 2)
+
+    def test_port_opened_by_name_when_list_shifts(self):
+        h = self.hub()
+        fake_rtmidi.PORTS.insert(0, "Other:Other MIDI 1 28:0")
+        h._stop_pool_in(SY)
+        self.assertEqual(h._pool_in(SY).port, SY)
 
     def test_close_removes_connections(self):
         h = self.hub(routes=[{"from": "keys", "to": ["synth"]}])

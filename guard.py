@@ -159,6 +159,7 @@ class LoopGuard:
         self._trips = {}         # dev -> deque of trip times
         self._flood_warned = {}  # dev -> t
         self.alerts = deque(maxlen=30)
+        self.on_alert = None     # optional callback(alert), e.g. to log it
         self._ids = itertools.count(1)
         self.configure(config)
 
@@ -254,8 +255,11 @@ class LoopGuard:
         self.alerts.clear()
 
     def _alert(self, level, kind, dev, text):
-        self.alerts.append({"id": next(self._ids), "t": time.time(), "level": level,
-                            "kind": kind, "device": dev, "text": text})
+        alert = {"id": next(self._ids), "t": time.time(), "level": level,
+                 "kind": kind, "device": dev, "text": text}
+        self.alerts.append(alert)
+        if self.on_alert:
+            self.on_alert(alert)
 
     def snapshot(self, now=None):
         now = self.clock() if now is None else now
