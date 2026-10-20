@@ -49,6 +49,18 @@ class Hub(unittest.TestCase):
         h._on_msg(KB_IN, ([0xB0, 20, 64], 0.0))
         self.assertEqual(fake_rtmidi.SENT[SY], [[0xF0, 0x7D, 64, 0xF7]])
 
+    def test_input_arrives_through_callback(self):
+        h = self.hub(mappings=[{"input": {"device": "synth", "type": "sysex",
+                                          "template": [0xF0, 0x7D, 0, 0xF7], "value_index": 2},
+                                "output": {"device": "keys", "type": "cc", "cc": 7}}])
+        h.ins["synth"][0].feed([0xF0, 0x7D, 33, 0xF7])
+        self.assertEqual(fake_rtmidi.SENT[KB_OUT], [[0xB0, 7, 33]])
+
+    def test_callback_error_does_not_escape(self):
+        h = self.hub()
+        with mock.patch.object(h, "_on_msg", side_effect=ValueError("boom")):
+            h.ins["synth"][0].feed([0x90, 60, 1])  # must not raise into rtmidi
+
     def test_sysex_to_cc_mapping(self):
         h = self.hub(mappings=[{"input": {"device": "synth", "type": "sysex",
                                           "template": [0xF0, 0x7D, 0, 0xF7], "value_index": 2},

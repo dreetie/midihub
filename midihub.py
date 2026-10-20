@@ -6,7 +6,7 @@ Two paths for MIDI:
 * Direct routes are ALSA sequencer subscriptions made with ``aconnect``. The
   kernel delivers those messages itself; they never touch Python, so they add
   no latency. This is the default for every route.
-* The translation path: midihub polls every device input, matches mappings
+* The translation path: midihub listens to every device input, matches mappings
   and sends the translated message. Routes that must hold back some messages
   ("replace original" mappings) and network export also run here.
 """
@@ -103,9 +103,10 @@ class Hub:
         # ALSA seq client every time one is destroyed, so we never destroy them for
         # a port that still exists. Ports that vanish are dropped (their client is
         # gone with the port); a port that reappears with a new index gets a new open.
-        # Inputs use a polling thread instead of set_callback: python-rtmidi's ALSA
-        # backend DROPS system-exclusive messages in callback mode (verified on
-        # 1.5.8), polling via get_message() delivers them fine.
+        # Inputs use set_callback, not get_message() polling: the queue behind
+        # get_message() (RtMidi 5/6) is shared between threads without memory
+        # barriers, and on ARM (Raspberry Pi) a poll can copy a half-written
+        # message and abort the process with std::bad_alloc.
         self._in_pool = {}
         self._out_pool = {}
         self._aconnect_conns = set()
@@ -251,17 +252,15 @@ class Hub:
         self._send_init()
 
     def _stop_pool_in(self, name):
-        """Stop the polling thread and close a pooled MidiIn for a dead port."""
-        entry = self._in_pool.pop(name, None)
-        if not entry:
+        """Close a pooled MidiIn for a dead port."""
+        m = self._in_pool.pop(name, None)
+        if not m:
             return
-        m, t, stop = entry
-        stop.set()
         try:
+            m.cancel_callback()
             m.close_port()
         except Exception:
             pass
-        t.join(timeout=0.5)
 
     def _stop_pool_out(self, name):
         """Close a pooled MidiOut for a dead port."""
@@ -288,31 +287,24 @@ class Hub:
     def _pool_in(self, name):
         """Return an open MidiIn on this port, reusing the pooled one. A
         replugged device gets a fresh open (see connect)."""
-        entry = self._in_pool.get(name)
-        if entry:
-            return entry[0]
-        # Third arg raises rtmidi's 1024-message queue: floods (active sensing +
-        # sysex bursts) would otherwise overflow it and drop messages.
-        m = MidiIn(API_LINUX_ALSA, "midihub-in", 100000)
+        m = self._in_pool.get(name)
+        if m:
+            return m
+        m = MidiIn(API_LINUX_ALSA, "midihub-in")
         m.ignore_types(False, False, False)
+        m.set_callback(self._on_input, name)
         if not self._open(m, name):
             return None  # port vanished meanwhile; the next rescan retries
-        stop = threading.Event()
-        t = threading.Thread(target=self._poll_in, args=(name, m, stop), daemon=True)
-        t.start()
-        self._in_pool[name] = (m, t, stop)
+        self._in_pool[name] = m
         return m
 
-    def _poll_in(self, name, m, stop):
-        """Drain a MidiIn via polling (callbacks would drop sysex, see above).
-        Messages are drained back to back; the 1 ms nap only happens when idle."""
-        get = m.get_message
-        while not stop.is_set():
-            msg = get()
-            if msg:
-                self._on_msg(name, msg)
-            else:
-                time.sleep(0.001)
+    def _on_input(self, msg, name):
+        """rtmidi callback, called from rtmidi's own input thread per port.
+        An exception must not escape into rtmidi."""
+        try:
+            self._on_msg(name, msg)
+        except Exception as e:
+            _log(f"error handling {msg!r} from {name}: {e}")
 
     def _pool_out(self, name):
         m = self._out_pool.get(name)
@@ -347,7 +339,7 @@ class Hub:
 
     def _manage_aconnect(self):
         """Create/remove ALSA sequencer subscriptions for direct routes, so
-        passthrough never goes through this process (no polling latency)."""
+        passthrough never goes through this process (no Python in the path)."""
         if not shutil.which("aconnect"):
             return False
         wanted = self._wanted_conns()
