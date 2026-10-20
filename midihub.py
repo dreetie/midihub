@@ -6,7 +6,7 @@ Two paths for MIDI:
 * Direct routes are ALSA sequencer subscriptions made with ``aconnect``. The
   kernel delivers those messages itself; they never touch Python, so they add
   no latency. This is the default for every route.
-* The translation path: midihub polls every device input, matches mappings
+* The translation path: midihub listens to every device input, matches mappings
   and sends the translated message. Routes that must hold back some messages
   ("replace original" mappings) and network export also run here.
 """
@@ -37,6 +37,31 @@ def _client_port(port_name):
     return ":".join(found[-1]) if found else port_name
 
 
+def _port_token(port_name):
+    """Something that changes when the USB device behind a port is replugged.
+
+    A device that comes back on the same ALSA card gets the same client:port,
+    so the same port name. Its USB device number (/proc/asound/cardN/usbbus)
+    is new on every plug-in, which tells a replug apart from "still there".
+    Card clients are numbered 16 + 4 * card. None for non-USB ports."""
+    try:
+        client = int(_client_port(port_name).split(":")[0])
+    except ValueError:
+        return None
+    if not 16 <= client < 128:
+        return None
+    try:
+        with open(f"/proc/asound/card{(client - 16) // 4}/usbbus") as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def _log(text):
+    # Goes to the journal under systemd (stdout is a pipe there, so flush).
+    print(f"midihub: {text}", flush=True)
+
+
 class Hub:
     def __init__(self, config_path=CONFIG_PATH, config=None):
         if config is not None:
@@ -50,6 +75,7 @@ class Hub:
         self.port_names = {}
         self.activity = {}
         self.guard = LoopGuard()
+        self.guard.on_alert = lambda a: _log(a["text"])
         self.plan = plan({})
         self._key = None
         self._mtime = None
@@ -65,6 +91,7 @@ class Hub:
         self._learn = None
         self._learn_seq = 0
         self._cleaned_key = None
+        self._tokens = {}          # port name -> _port_token when last connected
         # Reuse ONE MidiIn and ONE MidiOut for port enumeration: each new RtMidi
         # client opens /dev/snd/seq, and python-rtmidi leaks that fd on close
         # (hits the ALSA seq-client limit -> 'Cannot allocate memory').
@@ -76,9 +103,10 @@ class Hub:
         # ALSA seq client every time one is destroyed, so we never destroy them for
         # a port that still exists. Ports that vanish are dropped (their client is
         # gone with the port); a port that reappears with a new index gets a new open.
-        # Inputs use a polling thread instead of set_callback: python-rtmidi's ALSA
-        # backend DROPS system-exclusive messages in callback mode (verified on
-        # 1.5.8), polling via get_message() delivers them fine.
+        # Inputs use set_callback, not get_message() polling: the queue behind
+        # get_message() (RtMidi 5/6) is shared between threads without memory
+        # barriers, and on ARM (Raspberry Pi) a poll can copy a half-written
+        # message and abort the process with std::bad_alloc.
         self._in_pool = {}
         self._out_pool = {}
         self._aconnect_conns = set()
@@ -181,22 +209,28 @@ class Hub:
             r = [n for n in readable if m and m in n]
             w = [n for n in writable if m and m in n]
             matched[ident] = {"in": r, "out": w}
-        key = tuple(sorted((ident, kind, n) for ident, ms in matched.items()
+        tokens = {n: _port_token(n) for ms in matched.values() for lst in ms.values() for n in lst}
+        key = tuple(sorted((ident, kind, n, tokens[n]) for ident, ms in matched.items()
                            for kind, lst in ms.items() for n in lst))
         with self.lock:
             if key != self._key:
                 self._key = key
-                # Drop pooled handles for ports that no longer exist (device unplugged).
-                live = set()
-                for ms in matched.values():
-                    for lst in ms.values():
-                        live.update(lst)
+                # Ports that vanished, or came back under the same name after a
+                # replug: their pooled handles and ALSA connections are dead.
+                gone = {n for n, t in self._tokens.items() if tokens.get(n, -1) != t}
+                for n in sorted(gone):
+                    _log(f"port gone or replugged: {n}")
+                for n in sorted(set(tokens) - set(self._tokens)):
+                    _log(f"port found: {n}")
+                self._tokens = tokens
                 for name in list(self._in_pool):
-                    if name not in live:
+                    if name not in tokens or name in gone:
                         self._stop_pool_in(name)
                 for name in list(self._out_pool):
-                    if name not in live:
+                    if name not in tokens or name in gone:
                         self._stop_pool_out(name)
+                dead = {_client_port(n) for n in gone}
+                self._aconnect_conns = {c for c in self._aconnect_conns if not dead & set(c)}
                 self.port_names = {ident: sorted(set(ms["in"] + ms["out"]))
                                    for ident, ms in matched.items()}
                 self._dev_in = {ident: ms["in"] for ident, ms in matched.items()}
@@ -209,8 +243,8 @@ class Hub:
                 ins, outs = {}, {}
                 for ident, ms in matched.items():
                     self.activity.setdefault(ident, 0)
-                    ins[ident] = [self._pool_in(n, readable) for n in ms["in"]]
-                    outs[ident] = [self._pool_out(n, writable) for n in ms["out"]]
+                    ins[ident] = [self._pool_in(n) for n in ms["in"]]
+                    outs[ident] = [self._pool_out(n) for n in ms["out"]]
                 self.ins = {k: [m for m in v if m] for k, v in ins.items()}
                 self.outs = {k: [m for m in v if m] for k, v in outs.items()}
             self.guard.expire()
@@ -218,67 +252,68 @@ class Hub:
         self._send_init()
 
     def _stop_pool_in(self, name):
-        """Stop the polling thread and close a pooled MidiIn for a dead port."""
-        entry = self._in_pool.pop(name, None)
-        if not entry:
+        """Close a pooled MidiIn for a dead port."""
+        m = self._in_pool.pop(name, None)
+        if not m:
             return
-        _idx, m, t, stop = entry
-        stop.set()
         try:
+            m.cancel_callback()
             m.close_port()
         except Exception:
             pass
-        t.join(timeout=0.5)
 
     def _stop_pool_out(self, name):
         """Close a pooled MidiOut for a dead port."""
         entry = self._out_pool.pop(name, None)
         if not entry:
             return
-        _idx, m = entry
+        m = entry
         try:
             m.close_port()
         except Exception:
             pass
 
-    def _pool_in(self, name, readable):
-        """Return an open MidiIn on this port, reusing the pooled one. Port names
-        include the ALSA client:port, so a replugged device gets a new name and
-        a fresh open; an open port stays attached even if its index shifts."""
-        entry = self._in_pool.get(name)
-        if entry:
-            return entry[1]
-        idx = readable.index(name)
-        # Third arg raises rtmidi's 1024-message queue: floods (active sensing +
-        # sysex bursts) would otherwise overflow it and drop messages.
-        m = MidiIn(API_LINUX_ALSA, "midihub-in", 100000)
+    @staticmethod
+    def _open(m, name):
+        """Open port `name` on m. The index comes from m's own port list, taken
+        right before opening: an index from the earlier probe can point at
+        another port when devices are being plugged in at that moment."""
+        ports = m.get_ports()
+        if name not in ports:
+            return False
+        m.open_port(ports.index(name))
+        return True
+
+    def _pool_in(self, name):
+        """Return an open MidiIn on this port, reusing the pooled one. A
+        replugged device gets a fresh open (see connect)."""
+        m = self._in_pool.get(name)
+        if m:
+            return m
+        m = MidiIn(API_LINUX_ALSA, "midihub-in")
         m.ignore_types(False, False, False)
-        m.open_port(idx)
-        stop = threading.Event()
-        t = threading.Thread(target=self._poll_in, args=(name, m, stop), daemon=True)
-        t.start()
-        self._in_pool[name] = (idx, m, t, stop)
+        m.set_callback(self._on_input, name)
+        if not self._open(m, name):
+            return None  # port vanished meanwhile; the next rescan retries
+        self._in_pool[name] = m
         return m
 
-    def _poll_in(self, name, m, stop):
-        """Drain a MidiIn via polling (callbacks would drop sysex, see above).
-        Messages are drained back to back; the 1 ms nap only happens when idle."""
-        get = m.get_message
-        while not stop.is_set():
-            msg = get()
-            if msg:
-                self._on_msg(name, msg)
-            else:
-                time.sleep(0.001)
+    def _on_input(self, msg, name):
+        """rtmidi callback, called from rtmidi's own input thread per port.
+        An exception must not escape into rtmidi."""
+        try:
+            self._on_msg(name, msg)
+        except Exception as e:
+            _log(f"error handling {msg!r} from {name}: {e}")
 
-    def _pool_out(self, name, writable):
-        entry = self._out_pool.get(name)
-        if entry:
-            return entry[1]
-        idx = writable.index(name)
+    def _pool_out(self, name):
+        m = self._out_pool.get(name)
+        if m:
+            return m
         m = MidiOut()
-        m.open_port(idx)
-        self._out_pool[name] = (idx, m)
+        if not self._open(m, name):
+            return None
+        self._out_pool[name] = m
         return m
 
     # ------------------------------------------------------ direct routes
@@ -304,7 +339,7 @@ class Hub:
 
     def _manage_aconnect(self):
         """Create/remove ALSA sequencer subscriptions for direct routes, so
-        passthrough never goes through this process (no polling latency)."""
+        passthrough never goes through this process (no Python in the path)."""
         if not shutil.which("aconnect"):
             return False
         wanted = self._wanted_conns()
@@ -322,9 +357,13 @@ class Hub:
         for conn in wanted - self._aconnect_conns:
             if self._aconnect(*conn):
                 self._aconnect_conns.add(conn)
+                _log(f"connected {conn[0]} -> {conn[1]}")
+            else:
+                _log(f"could not connect {conn[0]} -> {conn[1]}")
         for conn in self._aconnect_conns - wanted:
             self._aconnect("-d", *conn)
             self._aconnect_conns.discard(conn)
+            _log(f"disconnected {conn[0]} -> {conn[1]}")
         return bool(self._aconnect_conns)
 
     def _rewire(self):
@@ -345,7 +384,9 @@ class Hub:
         not on every rescan."""
         init = self.config.get("init") or {}
         for ident in self.config.get("devices", {}):
-            outs = tuple(self._dev_out.get(ident) or ())
+            # With the token, a replugged device gets its init again even
+            # when it comes back under the same port name.
+            outs = tuple((n, self._tokens.get(n)) for n in self._dev_out.get(ident) or ())
             msgs = init.get(ident) or []
             state = (outs, json.dumps(msgs))
             if not outs:

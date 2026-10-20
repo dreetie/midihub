@@ -46,13 +46,21 @@ git-ignored. Never commit device-specific setups, paths, hostnames or users.
   live port. Port names include `client:port`, so a replugged device gets a new
   name and a fresh handle. One MidiIn and one MidiOut are reused for
   enumeration.
-- In callback mode the ALSA backend drops SysEx (seen on 1.5.8). Inputs are
-  polled with `get_message()` in one thread per port, napping 1 ms only when
-  idle.
-- The ALSA MidiIn queue defaults to 1024 messages and overflows with active
-  sensing + SysEx bursts ("message queue limit reached"). The third
-  constructor argument raises it: `MidiIn(API_LINUX_ALSA, "midihub-in", 100000)`;
-  import `API_LINUX_ALSA` explicitly.
+- Never poll inputs with `get_message()`. The RtMidi queue behind it (5.0 in
+  python-rtmidi 1.5.8, also 6.0) has no memory barriers between rtmidi's input
+  thread and the polling thread; on a Raspberry Pi (ARM) a poll can copy a
+  half-written message and the process dies with `std::bad_alloc` (seen
+  every few minutes on a Pi 3). Inputs use `set_callback`, which runs in
+  rtmidi's own input thread and never touches that queue. Callback mode
+  delivers SysEx (`check.py` relies on it) once `ignore_types(False, ...)` is
+  set. Import `API_LINUX_ALSA` explicitly.
+- A device replugged quickly can come back on the same ALSA card, so with the
+  same `client:port` and port name, while every subscription to the old port
+  is gone. midihub tells the two apart with the card's USB device number
+  (`/proc/asound/cardN/usbbus`, new on every plug-in; card clients are
+  16 + 4 * card) and then reopens handles, reconnects routes and resends init.
+- Open a port by the index from the opening handle's own `get_ports()`, never
+  from an earlier probe: indexes shift while devices are being plugged in.
 - `MidiOut.get_ports()` lists writable ports, `MidiIn.get_ports()` readable
   ones; virtual ports can be one-directional, so both lists are needed.
 - `snd-virmidi` works for testing, but its rawmidi side is unreliable where

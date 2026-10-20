@@ -25,8 +25,21 @@ class _Base:
 
 
 class MidiIn(_Base):
+    callback = None
+
     def ignore_types(self, *a):
         pass
+
+    def set_callback(self, func, data=None):
+        self.callback = (func, data)
+
+    def cancel_callback(self):
+        self.callback = None
+
+    def feed(self, msg):
+        """Deliver msg the way rtmidi's input thread would."""
+        func, data = self.callback
+        func((list(msg), 0.0), data)
 
     def get_message(self):
         q = INBOX.get(self.port)
